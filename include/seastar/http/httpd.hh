@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <functional>
 #include <limits>
 #include <cctype>
 #include <vector>
@@ -37,6 +38,7 @@
 #include <seastar/http/routes.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/scheduling.hh>
 
 namespace seastar {
 
@@ -136,6 +138,11 @@ class http_server {
     bool _generate_date_header = true;
     gate _task_gate;
     std::optional<net::keepalive_params> _keepalive_params;
+    // Returns scheduling group for TLS handshakes. Consulted only for TLS listeners.
+    std::function<scheduling_group()> _new_connection_scheduling_group_cb;
+    // Hook invoked after switching to the TLS handshake scheduling group, right before the handshake.
+    // Aimed for testing if the scheduling group was really changed.
+    std::function<void()> _on_tls_handshake_sg_switch;
 public:
     routes _routes;
     using connection = seastar::httpd::connection;
@@ -199,6 +206,8 @@ public:
     /// When set to false the periodic date-update timer is also stopped.
     void set_generate_date_header(bool b);
 
+    void set_new_connection_scheduling_group_cb(std::function<scheduling_group()> fn);
+
     future<> listen(socket_address addr, server_credentials_ptr credentials);
     future<> listen(socket_address addr, listen_options lo, server_credentials_ptr credentials);
     future<> listen(socket_address addr, listen_options lo);
@@ -219,6 +228,7 @@ public:
     static sstring http_date();
 private:
     future<> do_accept_one(int which, bool with_tls);
+    future<> do_process_connection(connected_socket conn_fd, socket_address remote_address, bool tls);
     boost::intrusive::list<connection> _connections;
     friend class seastar::httpd::connection;
     friend class http_server_tester;
@@ -228,6 +238,9 @@ class http_server_tester {
 public:
     static std::vector<server_socket>& listeners(http_server& server) {
         return server._listeners;
+    }
+    static void set_on_tls_handshake_sg_switch(http_server& server, std::function<void()> fn) {
+        server._on_tls_handshake_sg_switch = std::move(fn);
     }
 };
 
